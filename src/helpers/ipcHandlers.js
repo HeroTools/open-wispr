@@ -182,7 +182,8 @@ class IPCHandlers {
           if (
             message.includes("Installing") ||
             message.includes("Downloading") ||
-            message.includes("Collecting")
+            message.includes("Collecting") ||
+            message.includes("Creating virtual environment")
           ) {
             event.sender.send("whisper-install-progress", {
               type: "progress",
@@ -252,6 +253,14 @@ class IPCHandlers {
 
     ipcMain.handle("check-ffmpeg-availability", async (event) => {
       return this.whisperManager.checkFFmpegAvailability();
+    });
+
+    ipcMain.handle("cleanup-virtual-environment", async (event) => {
+      try {
+        return await this.whisperManager.cleanupVirtualEnvironment();
+      } catch (error) {
+        throw error;
+      }
     });
 
     // Utility handlers

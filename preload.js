@@ -55,6 +55,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
   cancelWhisperDownload: () => ipcRenderer.invoke("cancel-whisper-download"),
   checkFFmpegAvailability: () =>
     ipcRenderer.invoke("check-ffmpeg-availability"),
+  cleanupVirtualEnvironment: () =>
+    ipcRenderer.invoke("cleanup-virtual-environment"),
 
   // Window control functions
   windowMinimize: () => ipcRenderer.invoke("window-minimize"),

@@ -15,24 +15,54 @@ class WhisperManager {
     this.isInitialized = false; // Track if startup init completed
     this.currentDownloadProcess = null; // Track current download process for cancellation
     this.pythonInstaller = new PythonInstaller();
+    this.venvPath = null; // Virtual environment path
+    this.venvPythonPath = null; // Python executable in virtual environment
   }
 
   getWhisperScriptPath() {
-    // In production, the file is unpacked from ASAR
+    // In development, use the source file
     if (process.env.NODE_ENV === "development") {
       return path.join(__dirname, "..", "..", "whisper_bridge.py");
     } else {
-      // In production, use the unpacked path
-      return path.join(
-        process.resourcesPath,
-        "app.asar.unpacked",
-        "whisper_bridge.py"
-      );
+      // In production, try multiple possible paths
+      const possiblePaths = [
+        // Current working directory (most reliable fallback)
+        path.join(process.cwd(), "whisper_bridge.py"),
+        // Relative to the current script
+        path.join(__dirname, "..", "..", "whisper_bridge.py")
+      ];
+      
+      // Add Electron-specific paths if available
+      if (process.resourcesPath) {
+        possiblePaths.unshift(
+          path.join(process.resourcesPath, "app.asar.unpacked", "whisper_bridge.py"),
+          path.join(process.resourcesPath, "whisper_bridge.py")
+        );
+      }
+      
+      // Check which path exists
+      for (const scriptPath of possiblePaths) {
+        if (fs.existsSync(scriptPath)) {
+          debugLogger.log('Found whisper_bridge.py at:', scriptPath);
+          return scriptPath;
+        }
+      }
+      
+      // If none found, return the first expected path and let the error handler deal with it
+      debugLogger.error('whisper_bridge.py not found in any expected location:', possiblePaths);
+      return possiblePaths[0];
     }
   }
 
   async initializeAtStartup() {
     try {
+      // Try to initialize virtual environment first
+      try {
+        await this.createVirtualEnvironment();
+      } catch (venvError) {
+        debugLogger.log('Virtual environment initialization failed:', venvError.message);
+      }
+      
       await this.findPythonExecutable();
       await this.checkWhisperInstallation();
       this.isInitialized = true;
@@ -380,12 +410,120 @@ class WhisperManager {
     }
   }
 
+  getVirtualEnvPath() {
+    // Create a virtual environment in the user's home directory
+    const homeDir = os.homedir();
+    return path.join(homeDir, '.open-whispr-venv');
+  }
+
+  async createVirtualEnvironment(progressCallback = null) {
+    const venvPath = this.getVirtualEnvPath();
+    
+    if (progressCallback) {
+      progressCallback({ stage: "Creating virtual environment...", percentage: 10 });
+    }
+
+    try {
+      // Check if virtual environment already exists
+      if (fs.existsSync(venvPath)) {
+        debugLogger.log('Virtual environment already exists at:', venvPath);
+        this.venvPath = venvPath;
+        this.venvPythonPath = path.join(venvPath, 'bin', 'python');
+        if (process.platform === 'win32') {
+          this.venvPythonPath = path.join(venvPath, 'Scripts', 'python.exe');
+        }
+        
+        // Verify the virtual environment is still valid
+        if (fs.existsSync(this.venvPythonPath)) {
+          return { success: true, method: "existing" };
+        } else {
+          debugLogger.log('Virtual environment exists but Python executable not found, recreating...');
+          // Remove corrupted virtual environment
+          await fsPromises.rm(venvPath, { recursive: true, force: true });
+        }
+      }
+
+      // Find system Python to create virtual environment
+      const systemPython = await this.findSystemPython();
+      
+      if (progressCallback) {
+        progressCallback({ stage: "Creating virtual environment...", percentage: 30 });
+      }
+
+      // Create virtual environment
+      await runCommand(systemPython, ['-m', 'venv', venvPath], { timeout: TIMEOUTS.INSTALL });
+
+      if (progressCallback) {
+        progressCallback({ stage: "Virtual environment created!", percentage: 100 });
+      }
+
+      this.venvPath = venvPath;
+      this.venvPythonPath = path.join(venvPath, 'bin', 'python');
+      if (process.platform === 'win32') {
+        this.venvPythonPath = path.join(venvPath, 'Scripts', 'python.exe');
+      }
+
+      // Verify the virtual environment was created successfully
+      if (!fs.existsSync(this.venvPythonPath)) {
+        throw new Error('Virtual environment created but Python executable not found');
+      }
+
+      return { success: true, method: "created" };
+    } catch (error) {
+      debugLogger.error('Failed to create virtual environment:', error);
+      throw new Error(`Failed to create virtual environment: ${error.message}`);
+    }
+  }
+
+  async findSystemPython() {
+    const possiblePaths = [
+      "python3.11",
+      "python3",
+      "python",
+      "/usr/bin/python3.11",
+      "/usr/bin/python3",
+      "/usr/local/bin/python3.11",
+      "/usr/local/bin/python3",
+      "/opt/homebrew/bin/python3.11",
+      "/opt/homebrew/bin/python3",
+      "/usr/bin/python",
+      "/usr/local/bin/python",
+    ];
+
+    for (const pythonPath of possiblePaths) {
+      try {
+        const version = await this.getPythonVersion(pythonPath);
+        if (this.isPythonVersionSupported(version)) {
+          return pythonPath;
+        }
+      } catch (error) {
+        continue;
+      }
+    }
+
+    throw new Error("No suitable Python installation found for creating virtual environment");
+  }
+
   async findPythonExecutable() {
     // Return cached result if available
     if (this.pythonCmd) {
       return this.pythonCmd;
     }
 
+    // First, try to use virtual environment Python if available
+    if (this.venvPythonPath && fs.existsSync(this.venvPythonPath)) {
+      try {
+        const version = await this.getPythonVersion(this.venvPythonPath);
+        if (this.isPythonVersionSupported(version)) {
+          this.pythonCmd = this.venvPythonPath;
+          return this.pythonCmd;
+        }
+      } catch (error) {
+        debugLogger.log('Virtual environment Python not suitable, falling back to system Python');
+      }
+    }
+
+    // Fall back to system Python detection
     const possiblePaths = [
       "python3.11",
       "python3",
@@ -421,6 +559,7 @@ class WhisperManager {
     try {
       // Clear cached Python command since we're installing new one
       this.pythonCmd = null;
+      this.venvPythonPath = null; // Also clear virtual environment path
       
       const result = await this.pythonInstaller.installPython(progressCallback);
       
@@ -436,6 +575,23 @@ class WhisperManager {
       console.error("Python installation failed:", error);
       throw error;
     }
+  }
+
+  async cleanupVirtualEnvironment() {
+    const venvPath = this.getVirtualEnvPath();
+    if (fs.existsSync(venvPath)) {
+      try {
+        // Remove the virtual environment directory
+        await fsPromises.rm(venvPath, { recursive: true, force: true });
+        this.venvPath = null;
+        this.venvPythonPath = null;
+        this.pythonCmd = null; // Clear cached Python command
+        return { success: true, message: "Virtual environment cleaned up successfully" };
+      } catch (error) {
+        throw new Error(`Failed to cleanup virtual environment: ${error.message}`);
+      }
+    }
+    return { success: true, message: "No virtual environment to cleanup" };
   }
 
   async checkPythonInstallation() {
@@ -649,7 +805,16 @@ class WhisperManager {
   // Removed - now using shared runCommand from utils/process.js
 
   async installWhisper() {
-    const pythonCmd = await this.findPythonExecutable();
+    let pythonCmd;
+    
+    try {
+      // Try to create or use virtual environment first
+      await this.createVirtualEnvironment();
+      pythonCmd = this.venvPythonPath;
+    } catch (venvError) {
+      debugLogger.log('Virtual environment creation failed, falling back to system Python:', venvError.message);
+      pythonCmd = await this.findPythonExecutable();
+    }
     
     // Upgrade pip first to avoid version issues
     try {
@@ -657,32 +822,39 @@ class WhisperManager {
     } catch (error) {
       debugLogger.log("First pip upgrade attempt failed:", error.message);
       
-      // Try user install for pip upgrade
-      try {
-        await runCommand(pythonCmd, ["-m", "pip", "install", "--user", "--upgrade", "pip"], { timeout: TIMEOUTS.PIP_UPGRADE });
-      } catch (userError) {
-        // If pip upgrade fails completely, try to detect if it's the TOML error
-        if (error.message.includes("pyproject.toml") || error.message.includes("TomlError")) {
-          // Try installing with legacy resolver as a workaround
-          try {
-            await runCommand(pythonCmd, ["-m", "pip", "install", "--use-deprecated=legacy-resolver", "--upgrade", "pip"], { timeout: TIMEOUTS.PIP_UPGRADE });
-          } catch (legacyError) {
-            throw new Error("Failed to upgrade pip. Please manually run: python -m pip install --upgrade pip");
+      // Try user install for pip upgrade (only if not using virtual environment)
+      if (pythonCmd !== this.venvPythonPath) {
+        try {
+          await runCommand(pythonCmd, ["-m", "pip", "install", "--user", "--upgrade", "pip"], { timeout: TIMEOUTS.PIP_UPGRADE });
+        } catch (userError) {
+          // If pip upgrade fails completely, try to detect if it's the TOML error
+          if (error.message.includes("pyproject.toml") || error.message.includes("TomlError")) {
+            // Try installing with legacy resolver as a workaround
+            try {
+              await runCommand(pythonCmd, ["-m", "pip", "install", "--use-deprecated=legacy-resolver", "--upgrade", "pip"], { timeout: TIMEOUTS.PIP_UPGRADE });
+            } catch (legacyError) {
+              throw new Error("Failed to upgrade pip. Please manually run: python -m pip install --upgrade pip");
+            }
+          } else {
+            debugLogger.log("Pip upgrade failed completely, attempting to continue");
           }
-        } else {
-          debugLogger.log("Pip upgrade failed completely, attempting to continue");
         }
+      } else {
+        debugLogger.log("Pip upgrade failed in virtual environment, attempting to continue");
       }
     }
     
-    // Try regular install, then user install if permission issues
     // Install OpenAI Whisper
     try {
+      // In virtual environment, we can install directly without --user flag
       return await runCommand(pythonCmd, ["-m", "pip", "install", "-U", "openai-whisper"], { timeout: TIMEOUTS.DOWNLOAD });
     } catch (error) {
-      if (error.message.includes("Permission denied") || error.message.includes("access is denied")) {
-        // Retry with user installation
-        return await runCommand(pythonCmd, ["-m", "pip", "install", "--user", "-U", "openai-whisper"], { timeout: TIMEOUTS.DOWNLOAD });
+      // If using system Python, try user installation
+      if (pythonCmd !== this.venvPythonPath) {
+        if (error.message.includes("Permission denied") || error.message.includes("access is denied") || error.message.includes("externally-managed-environment")) {
+          // Retry with user installation
+          return await runCommand(pythonCmd, ["-m", "pip", "install", "--user", "-U", "openai-whisper"], { timeout: TIMEOUTS.DOWNLOAD });
+        }
       }
       
       // If we still get TOML error after pip upgrade, try legacy resolver for whisper
@@ -691,8 +863,12 @@ class WhisperManager {
         try {
           return await runCommand(pythonCmd, ["-m", "pip", "install", "--use-deprecated=legacy-resolver", "-U", "openai-whisper"], { timeout: TIMEOUTS.DOWNLOAD });
         } catch (legacyError) {
-          // Try user install with legacy resolver
-          return await runCommand(pythonCmd, ["-m", "pip", "install", "--user", "--use-deprecated=legacy-resolver", "-U", "openai-whisper"], { timeout: TIMEOUTS.DOWNLOAD });
+          // Try user install with legacy resolver (only if not using virtual environment)
+          if (pythonCmd !== this.venvPythonPath) {
+            return await runCommand(pythonCmd, ["-m", "pip", "install", "--user", "--use-deprecated=legacy-resolver", "-U", "openai-whisper"], { timeout: TIMEOUTS.DOWNLOAD });
+          } else {
+            throw legacyError;
+          }
         }
       }
       
@@ -702,6 +878,8 @@ class WhisperManager {
         message = "Microsoft Visual C++ build tools required. Install Visual Studio Build Tools.";
       } else if (message.includes("No matching distribution")) {
         message = "Python version incompatible. OpenAI Whisper requires Python 3.8-3.11.";
+      } else if (message.includes("externally-managed-environment")) {
+        message = "System Python is externally managed. The app will create a virtual environment for you.";
       }
       
       throw new Error(message);
@@ -832,7 +1010,6 @@ class WhisperManager {
   }
 
   async checkModelStatus(modelName) {
-    try {
       const pythonCmd = await this.findPythonExecutable();
       const whisperScriptPath = this.getWhisperScriptPath();
 
@@ -875,13 +1052,9 @@ class WhisperManager {
               reject(new Error(`Model status check error: ${error.message}`));
         });
       });
-    } catch (error) {
-      throw error;
-    }
   }
 
   async listWhisperModels() {
-    try {
       const pythonCmd = await this.findPythonExecutable();
       const whisperScriptPath = this.getWhisperScriptPath();
 
@@ -922,13 +1095,9 @@ class WhisperManager {
               reject(new Error(`Model list error: ${error.message}`));
         });
       });
-    } catch (error) {
-      throw error;
-    }
   }
 
   async deleteWhisperModel(modelName) {
-    try {
       const pythonCmd = await this.findPythonExecutable();
       const whisperScriptPath = this.getWhisperScriptPath();
 
@@ -977,9 +1146,6 @@ class WhisperManager {
               reject(new Error(`Model delete error: ${error.message}`));
         });
       });
-    } catch (error) {
-      throw error;
-    }
   }
 }
 
