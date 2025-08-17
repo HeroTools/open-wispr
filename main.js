@@ -1,4 +1,11 @@
 const { app, globalShortcut, BrowserWindow } = require("electron");
+const { version } = require("./package.json");
+
+// Handle --version flag
+if (process.argv.includes('--version')) {
+  console.log(version);
+  process.exit(0);
+}
 
 // Add global error handling for uncaught exceptions
 process.on("uncaughtException", (error) => {
@@ -79,7 +86,7 @@ async function startApp() {
   }
 
   // Ensure dock is visible on macOS
-  if (process.platform === 'darwin' && app.dock) {
+  if (process.platform === "darwin" && app.dock) {
     app.dock.show();
   }
 

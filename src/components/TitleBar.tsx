@@ -1,4 +1,5 @@
 import React from "react";
+import WindowControls from "./WindowControls";
 
 interface TitleBarProps {
   title?: string;
@@ -37,6 +38,7 @@ export default function TitleBar({
           style={{ WebkitAppRegion: "no-drag" }}
         >
           {actions}
+          {process.platform !== "darwin" ? <WindowControls /> : null}
         </div>
       </div>
     </div>

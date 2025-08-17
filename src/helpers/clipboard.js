@@ -1,5 +1,5 @@
 const { clipboard } = require("electron");
-const { spawn } = require("child_process");
+const { spawn, spawnSync } = require("child_process");
 
 class ClipboardManager {
   constructor() {
@@ -155,33 +155,77 @@ class ClipboardManager {
   }
 
   async pasteLinux(originalClipboard) {
-    return new Promise((resolve, reject) => {
-      const pasteProcess = spawn("xdotool", ["key", "ctrl+v"]);
+    const commandExists = (cmd) => {
+      try {
+        const res = spawnSync("sh", ["-lc", `command -v ${cmd}`], { stdio: "ignore" });
+        return res.status === 0;
+      } catch (_) {
+        return false;
+      }
+    };
 
-      pasteProcess.on("close", (code) => {
-        if (code === 0) {
-          // Text pasted successfully
-          setTimeout(() => {
-            clipboard.writeText(originalClipboard);
-          }, 100);
-          resolve();
-        } else {
-          reject(
-            new Error(
-              `Linux paste failed with code ${code}. Text is copied to clipboard.`
-            )
-          );
-        }
+    const isWayland =
+      (process.env.XDG_SESSION_TYPE || "").toLowerCase() === "wayland" ||
+      !!process.env.WAYLAND_DISPLAY;
+
+    // Define candidate tools in preference order
+    const candidates = isWayland
+      ? [
+          { cmd: "wtype", args: ["-M", "ctrl", "-p", "v", "-m", "ctrl"] },
+          // ydotool often requires uinput permissions; include as a best-effort
+          { cmd: "ydotool", args: ["key", "29:1", "47:1", "47:0", "29:0"] },
+        ]
+      : [
+          { cmd: "xdotool", args: ["key", "ctrl+v"] },
+        ];
+
+    const available = candidates.filter((c) => commandExists(c.cmd));
+
+    const pasteWith = (tool) =>
+      new Promise((resolve, reject) => {
+        const proc = spawn(tool.cmd, tool.args);
+
+        let timedOut = false;
+        const timeoutId = setTimeout(() => {
+          timedOut = true;
+          try { proc.kill("SIGKILL"); } catch (_) {}
+        }, 1000);
+
+        proc.on("close", (code) => {
+          if (timedOut) return reject(new Error(`Paste on Linux via ${tool.cmd} timed out`));
+          clearTimeout(timeoutId);
+          if (code === 0) {
+            setTimeout(() => clipboard.writeText(originalClipboard), 100);
+            resolve();
+          } else {
+            reject(new Error(`${tool.cmd} exited with code ${code}`));
+          }
+        });
+
+        proc.on("error", (error) => {
+          if (timedOut) return;
+          clearTimeout(timeoutId);
+          reject(error);
+        });
       });
 
-      pasteProcess.on("error", (error) => {
-        reject(
-          new Error(
-            `Linux paste failed: ${error.message}. Text is copied to clipboard.`
-          )
-        );
-      });
-    });
+    // Try tools in order; on total failure, return special error
+    for (const tool of available) {
+      try {
+        await pasteWith(tool);
+        return; // success
+      } catch (e) {
+        this.safeLog(`Paste with ${tool.cmd} failed:`, e?.message || e);
+        // try next
+      }
+    }
+
+    const err = new Error(
+      "Clipboard copied, but paste failed (no suitable tool or not permitted)."
+    );
+    // Special code for renderer to detect
+    err.code = "PASTE_SIMULATION_FAILED";
+    throw err;
   }
 
   async checkAccessibilityPermissions() {

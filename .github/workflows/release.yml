@@ -2,40 +2,86 @@ name: Release
 
 on:
   push:
-    tags:
-      - 'v*'
+    tags: [ 'v*' ]
   workflow_dispatch:
 
 jobs:
   release:
-    runs-on: ${{ matrix.os }}
-    
     strategy:
       matrix:
         os: [macos-latest, ubuntu-latest, windows-latest]
-        
+    runs-on: ${{ matrix.os }}
+
     steps:
-    - uses: actions/checkout@v4
-    
-    - name: Setup Node.js
-      uses: actions/setup-node@v4
-      with:
-        node-version: '20'
-        cache: 'npm'
-        
-    - name: Install dependencies
-      run: npm ci
-      
-    - name: Build and Release
-      env:
-        GH_TOKEN: ${{ secrets.GH_TOKEN }}
-        CSC_IDENTITY_AUTO_DISCOVERY: false
-      run: npm run dist -- --publish always
-      
-    - name: Upload artifacts
-      uses: actions/upload-artifact@v4
-      if: always()
-      with:
-        name: ${{ matrix.os }}-release
-        path: dist/
-        retention-days: 7
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      # Cache Electron/electron-builder downloads (all OS)
+      - name: Cache Electron caches (Linux/macOS)
+        if: matrix.os != 'windows-latest'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/electron
+            ~/.cache/electron-builder
+          key: ${{ runner.os }}-electron-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-electron-
+
+      - name: Cache Electron caches (Windows)
+        if: matrix.os == 'windows-latest'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~\AppData\Local\electron\Cache
+            ~\AppData\Local\electron-builder\Cache
+          key: ${{ runner.os }}-electron-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-electron-
+
+      # Linux-only: tools + user Flatpak runtimes with cache
+      - name: Install Linux packaging deps
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends rpm flatpak flatpak-builder xz-utils
+          flatpak --user remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+
+      - name: Determine Flatpak runtime version
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          RUNTIME=$(node -e "console.log(require('./electron-builder.json').flatpak?.runtimeVersion || '24.08')")
+          echo "FLATPAK_RUNTIME_VERSION=$RUNTIME" >> $GITHUB_ENV
+
+      - name: Restore Flatpak runtime cache
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/flatpak
+          key: ${{ runner.os }}-flatpak-${{ env.FLATPAK_RUNTIME_VERSION }}
+          restore-keys: |
+            ${{ runner.os }}-flatpak-
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+        run: npm run release
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ matrix.os }}-release
+          path: |
+            dist/**
+            !dist/linux-unpacked/**
+          retention-days: 7

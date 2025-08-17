@@ -5,6 +5,10 @@ contextBridge.exposeInMainWorld("electronAPI", {
   hideWindow: () => ipcRenderer.invoke("hide-window"),
   showDictationPanel: () => ipcRenderer.invoke("show-dictation-panel"),
   onToggleDictation: (callback) => ipcRenderer.on("toggle-dictation", callback),
+  
+  // Platform info
+  getPlatform: () => process.platform,
+  getSessionType: () => process.env.XDG_SESSION_TYPE,
 
   // Database functions
   saveTranscription: (text) =>

@@ -1,6 +1,6 @@
 {
-  "appId": "com.herotools.openwispr",
-  "productName": "OpenWispr",
+  "appId": "com.herotools.openwhispr",
+  "productName": "OpenWhispr",
   "directories": {
     "output": "dist"
   },
@@ -42,8 +42,8 @@
     "identity": "HeroTools Inc. (9R85XFMH59)",
     "extendInfo": {
       "LSUIElement": true,
-      "NSMicrophoneUsageDescription": "OpenWispr needs microphone access for speech-to-text transcription.",
-      "NSAccessibilityUsageDescription": "OpenWispr needs accessibility permissions to paste transcribed text into other applications."
+      "NSMicrophoneUsageDescription": "OpenWhispr needs microphone access for speech-to-text transcription.",
+      "NSAccessibilityUsageDescription": "OpenWhispr needs accessibility permissions to paste transcribed text into other applications."
     }
   },
   "afterSign": "scripts/afterSign.js",
@@ -57,10 +57,34 @@
   "linux": {
     "target": [
       "AppImage",
-      "deb"
+      "deb",
+      "rpm",
+      "tar.gz",
+      "flatpak"
     ],
     "icon": "assets/icon.png",
-    "category": "Utility"
+    "category": "Utility",
+    "artifactName": "${productName}-${version}-${os}-${arch}.${ext}"
+  },
+  "flatpak": {
+    "runtime": "org.freedesktop.Platform",
+    "runtimeVersion": "24.08",
+    "sdk": "org.freedesktop.Sdk",
+    "useWaylandFlags": true,
+    "finishArgs": [
+      "--socket=wayland",
+      "--socket=fallback-x11",
+      "--share=network",
+      "--share=ipc",
+      "--device=dri",
+      "--talk-name=org.freedesktop.portal.Desktop",
+      "--socket=pulseaudio",
+      "--filesystem=home",
+      "--filesystem=xdg-documents",
+      "--filesystem=xdg-download",
+      "--talk-name=org.freedesktop.Flatpak",
+      "--talk-name=org.freedesktop.Notifications"
+    ]
   },
   "nsis": {
     "oneClick": false,
@@ -69,7 +93,7 @@
     "createStartMenuShortcut": true
   },
   "dmg": {
-    "title": "OpenWispr",
+    "title": "OpenWhispr",
     "icon": "assets/icon.icns",
     "background": "assets/dmg-background.png",
     "window": {

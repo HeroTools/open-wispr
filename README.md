@@ -81,9 +81,9 @@ For maintainers who need to distribute signed builds:
 
 ```bash
 # Requires code signing certificates and notarization setup
-npm run build:mac    # macOS (requires Apple Developer account)
-npm run build:win    # Windows (requires code signing cert)
-npm run build:linux  # Linux
+npm run build        # Build for the current platform
+npm run build -- --x64 --linux deb # Build for specific platform, package and architecture
+
 ```
 
 ### First Time Setup
@@ -204,14 +204,11 @@ open-whispr/
 - `npm run start` - Start production build
 - `npm run setup` - First-time setup (creates .env file)
 - `npm run build:renderer` - Build the React app only
-- `npm run build` - Full build with signing (requires certificates)
-- `npm run build:mac` - macOS build with signing
-- `npm run build:win` - Windows build with signing
-- `npm run build:linux` - Linux build
+- `npm run build` - Full build with electron-builder (requires certificates for signed builds)
 - `npm run pack` - Build without signing (for personal use)
-- `npm run dist` - Build and package with signing
 - `npm run lint` - Run ESLint
 - `npm run preview` - Preview production build
+- `npm run clean` - Remove generated build artifacts
 
 ### Architecture
 
@@ -247,10 +244,8 @@ The build process creates a single executable for your platform:
 npm run pack
 
 # Production builds
-npm run dist           # Current platform
-npm run build:mac      # macOS DMG + ZIP
-npm run build:win      # Windows NSIS + Portable
-npm run build:linux    # AppImage + DEB
+npm run build          # Build for the current platform
+npm run build -- --x64 --linux deb # Build for specific platform, package and architecture
 ```
 
 ## Configuration
